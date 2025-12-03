@@ -1,24 +1,18 @@
 try:
-    height=float(input("身長をcmで入力してください:"))
-    weight=float(input("体重をkgで入力してください:"))
+    height_cm = float(input("Enter height in cm: "))
+    weight_kg = float(input("Enter weight in kg: "))
 
-    bmi=weight/(height/100)**2
-
-    print("あなたのBMIは",round(bmi,1),"です。")
+    bmi = weight_kg / (height_cm / 100) ** 2  # BMI = kg / m^2
+    print(f"Your BMI is {bmi:.1f}")
 
     if bmi < 18.5:
-        print("痩せ気味です。")
-
-    elif bmi<25:
-        print("標準")
+        print("Category: Underweight")
+    elif bmi < 25:
+        print("Category: Normal range")
     else:
-        print("肥満") 
+        print("Category: Overweight")
 
 except ValueError:
-    print("数字で入力しなさい")
-
+    print("Please enter numbers only.")
 except ZeroDivisionError:
-    print("身長は0より大きい値だろばか")
-
-
-
+    print("Height must be greater than zero.")
