@@ -1,13 +1,21 @@
-﻿"""Circuit training timer application with CLI and Tkinter UI."""
+"""Circuit training timer application with CLI and Tkinter UI."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import time
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
+
+from circuit_timer_pkg.domain.menu import (
+    TrainingMenu as DomainTrainingMenu,
+    format_time as format_time_core,
+    parse_duration as parse_duration_core,
+)
+from circuit_timer_pkg.domain.sequence import Phase as DomainPhase, build_sequence
+from circuit_timer_pkg.adapters.storage import (
+    load_menus as load_menus_core,
+    save_menus as save_menus_core,
+)
 
 try:  # Tkinter is optional so the CLI can still run.
     import tkinter as tk
@@ -17,77 +25,33 @@ except Exception:  # pragma: no cover - helps when Tk is missing.
     messagebox = None
     ttk = None
 
-MENU_FILE = Path(__file__).with_name("menus.json")
-
 
 def format_time(seconds: int) -> str:
     """Return an mm:ss string for the given seconds."""
 
-    minutes, secs = divmod(max(0, int(seconds)), 60)
-    return f"{minutes:02d}:{secs:02d}"
+    return format_time_core(seconds)
 
 
-@dataclass
-class TrainingMenu:
-    """シンプルなメニュー構造"""
-
-    name: str
-    set_seconds: int
-    rest_seconds: int
-    sets: int
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> "TrainingMenu":
-        return cls(
-            name=str(data["name"]),
-            set_seconds=int(data["set_seconds"]),
-            rest_seconds=int(data["rest_seconds"]),
-            sets=int(data["sets"]),
-        )
+# TrainingMenu is provided by circuit_timer_pkg.domain.menu
+TrainingMenu = DomainTrainingMenu
 
 
 def parse_duration(value: str) -> int:
     """Parse values like '45', '45s', '1.5m' into seconds."""
 
-    raw = value.strip().lower()
-    if not raw:
-        raise ValueError("値を入力してください。")
-
-    def _to_seconds(number: float) -> int:
-        seconds = int(number)
-        if seconds <= 0:
-            raise ValueError
-        return seconds
-
-    try:
-        if raw.endswith("m"):
-            minutes = float(raw[:-1])
-            return _to_seconds(minutes * 60)
-        if raw.endswith("s"):
-            return _to_seconds(float(raw[:-1]))
-        return _to_seconds(float(raw))
-    except ValueError as exc:
-        raise ValueError("数値または 30s / 0.5m 形式で入力してください。") from exc
+    return parse_duration_core(value)
 
 
 def load_menus() -> Dict[str, TrainingMenu]:
     """JSON からメニュー一覧を読み込む"""
 
-    if not MENU_FILE.exists():
-        return {}
-    data = json.loads(MENU_FILE.read_text(encoding="utf-8"))
-    menus = {}
-    for item in data:
-        menu = TrainingMenu.from_dict(item)
-        menus[menu.name] = menu
-    return menus
+    return load_menus_core()
 
 
 def save_menus(menus: Dict[str, TrainingMenu]) -> None:
     """メニュー一覧を JSON に保存"""
 
-    payload = [asdict(menu) for menu in menus.values()]
-    MENU_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    save_menus_core(menus)
 
 
 def prompt_seconds(prompt: str) -> int:
@@ -178,13 +142,16 @@ def countdown(label: str, seconds: int) -> None:
 def run_timer(menu: TrainingMenu) -> None:
     """メニューに従ってタイマーを進行"""
 
+    sequence = build_sequence(menu)
+    if not sequence:
+        print("フェーズがありません。メニューを確認してください。")
+        return
+
     print(f"\n=== {menu.name} を開始 ===")
-    for current_set in range(1, menu.sets + 1):
-        print(f"\nセット {current_set}/{menu.sets} - 作業開始")
-        countdown("作業", menu.set_seconds)
-        if current_set < menu.sets:
-            print("休憩に入ります")
-            countdown("休憩", menu.rest_seconds)
+    for phase in sequence:
+        label = f"セット {phase.set_index}/{phase.total_sets} - {phase.label}"
+        print(f"\n{label}")
+        countdown(phase.label, phase.duration)
     print("\nおつかれさまでした！")
 
 
@@ -222,7 +189,7 @@ def run_cli() -> None:
             print("1-4の数字を入力してください。")
 
 
-Phase = Tuple[str, int, int, int]
+Phase = DomainPhase
 
 
 class CircuitTimerApp:
@@ -484,12 +451,7 @@ class CircuitTimerApp:
         self._schedule_tick()
 
     def _build_sequence(self, menu: TrainingMenu) -> Sequence[Phase]:
-        phases: List[Phase] = []
-        for idx in range(1, menu.sets + 1):
-            phases.append(("作業", menu.set_seconds, idx, menu.sets))
-            if idx < menu.sets and menu.rest_seconds > 0:
-                phases.append(("休憩", menu.rest_seconds, idx, menu.sets))
-        return phases
+        return list(build_sequence(menu))
 
     def _schedule_tick(self) -> None:
         self.after_id = self.root.after(1000, self._tick)
