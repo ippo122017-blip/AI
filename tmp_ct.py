@@ -11,8 +11,7 @@ from circuit_timer_pkg.domain.menu import (
     format_time as format_time_core,
     parse_duration as parse_duration_core,
 )
-from circuit_timer_pkg.domain.sequence import Phase as DomainPhase
-from circuit_timer_pkg.domain.controller import TimerController
+from circuit_timer_pkg.domain.sequence import Phase as DomainPhase, build_sequence
 from circuit_timer_pkg.adapters.storage import (
     load_menus as load_menus_core,
     save_menus as save_menus_core,
@@ -131,52 +130,29 @@ def choose_menu(menus: Dict[str, TrainingMenu]) -> Optional[TrainingMenu]:
         print("範囲内の番号を選んでください。")
 
 
+def countdown(label: str, seconds: int) -> None:
+    """ラベル付きカウントダウン表示"""
+
+    for remaining in range(seconds, 0, -1):
+        print(f"{label}: 残り {remaining:02d} 秒", end="\r", flush=True)
+        time.sleep(1)
+    print(f"{label}: 完了{' ' * 10}")
+
+
 def run_timer(menu: TrainingMenu) -> None:
     """メニューに従ってタイマーを進行"""
 
-    controller: TimerController
-
-    def _describe_phase(phase: DomainPhase) -> str:
-        return f"{phase.label} (セット {phase.set_index}/{phase.total_sets})"
-
-    def _phase_start(phase: DomainPhase) -> None:
-        print("\a", end="")  # simple console notification
-        print(f"\n--- {_describe_phase(phase)} ---")
-        next_phase = _next_phase()
-        if next_phase:
-            print(f"次: {_describe_phase(next_phase)}")
-
-    def _tick(phase: DomainPhase, remaining: int, elapsed: int) -> None:
-        total = controller.total_seconds or 1
-        detail = f"{format_time(elapsed)} / {format_time(total)}"
-        print(
-            f"{phase.label}: 残り {max(0, remaining):02d} 秒 | {detail}",
-            end="\r",
-            flush=True,
-        )
-
-    def _complete() -> None:
-        print("\nおつかれさまでした！")
-
-    def _next_phase() -> Optional[DomainPhase]:
-        idx = controller.current_index + 1
-        if idx < len(controller.sequence):
-            return controller.sequence[idx]
-        return None
-
-    controller = TimerController(on_phase_start=_phase_start, on_tick=_tick, on_complete=_complete)
-    controller.load_menu(menu)
-    if not controller.sequence:
+    sequence = build_sequence(menu)
+    if not sequence:
         print("フェーズがありません。メニューを確認してください。")
         return
-    print(f"総時間: {format_time(controller.total_seconds)}")
 
     print(f"\n=== {menu.name} を開始 ===")
-    controller.start()
-    while controller.running:
-        time.sleep(1)
-        controller.tick()
-    print()
+    for phase in sequence:
+        label = f"セット {phase.set_index}/{phase.total_sets} - {phase.label}"
+        print(f"\n{label}")
+        countdown(phase.label, phase.duration)
+    print("\nおつかれさまでした！")
 
 
 def run_cli() -> None:
@@ -231,13 +207,12 @@ class CircuitTimerApp:
         except tk.TclError:
             pass
         self.colors = {
-            "bg": "#050816",
-            "card": "#111b2e",
-            "accent": "#f97316",
-            "accent_hover": "#fb923c",
+            "bg": "#0f172a",
+            "card": "#1e293b",
+            "accent": "#2563eb",
+            "accent_hover": "#1d4ed8",
             "text": "#f8fafc",
-            "muted": "#64748b",
-            "highlight": "#22d3ee",
+            "muted": "#94a3b8",
         }
         self.root.configure(background=self.colors["bg"])
         self._configure_styles()
@@ -252,17 +227,10 @@ class CircuitTimerApp:
 
         self.status_var = tk.StringVar(value="メニューを選択してください。")
         self.timer_var = tk.StringVar(value="タイマー停止中")
-        self.phase_detail_var = tk.StringVar(value="フェーズ未開始")
-        self.next_phase_var = tk.StringVar(value="次: -")
-        self.total_detail_var = tk.StringVar(value="総時間 00:00 / 経過 00:00")
 
         self.timer_running = False
-        self.controller = TimerController(
-            on_phase_start=self._handle_phase_start,
-            on_tick=self._handle_tick,
-            on_complete=self._handle_complete,
-        )
-        self.current_phase: Optional[Phase] = None
+        self.sequence: List[Phase] = []
+        self.current_phase_index = 0
         self.remaining = 0
         self.total_duration = 0
         self.elapsed_total = 0
@@ -280,10 +248,6 @@ class CircuitTimerApp:
         text = self.colors["text"]
         muted = self.colors["muted"]
 
-        headline_font = ("Montserrat", 16, "bold")
-        body_font = ("Montserrat", 11)
-        accent_font = ("Montserrat", 12, "bold")
-
         self.style.configure("Main.TFrame", background=bg)
         self.style.configure(
             "Card.TLabelframe",
@@ -294,15 +258,15 @@ class CircuitTimerApp:
         )
         self.style.configure("Card.TLabelframe.Label", background=card, foreground=muted)
         self.style.configure("Side.TFrame", background=card)
-        self.style.configure("Heading.TLabel", background=card, foreground=text, font=headline_font)
-        self.style.configure("Body.TLabel", background=card, foreground=text, font=body_font)
-        self.style.configure("Status.TLabel", background=card, foreground=muted, font=body_font)
+        self.style.configure("Heading.TLabel", background=card, foreground=text, font=("Segoe UI", 14, "bold"))
+        self.style.configure("Body.TLabel", background=card, foreground=text, font=("Segoe UI", 11))
+        self.style.configure("Status.TLabel", background=card, foreground=muted, font=("Segoe UI", 11))
         self.style.configure(
             "Accent.TButton",
             background=accent,
             foreground=text,
             padding=8,
-            font=accent_font,
+            font=("Segoe UI", 10, "bold"),
         )
         self.style.map(
             "Accent.TButton",
@@ -314,7 +278,7 @@ class CircuitTimerApp:
             background=card,
             foreground=text,
             padding=6,
-            font=body_font,
+            font=("Segoe UI", 10),
         )
         self.style.map(
             "Modern.TButton",
@@ -325,7 +289,7 @@ class CircuitTimerApp:
             "Timer.TLabel",
             background=card,
             foreground=text,
-            font=("Montserrat", 36, "bold"),
+            font=("Segoe UI", 32, "bold"),
         )
         self.style.configure(
             "Accent.Horizontal.TProgressbar",
@@ -391,15 +355,7 @@ class CircuitTimerApp:
         timer_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(16, 0))
 
         ttk.Label(timer_frame, textvariable=self.status_var, style="Heading.TLabel").pack(anchor="w")
-        ttk.Label(timer_frame, textvariable=self.timer_var, style="Status.TLabel").pack(anchor="w", pady=(2, 4))
-        ttk.Label(
-            timer_frame,
-            textvariable=self.phase_detail_var,
-            style="Body.TLabel",
-            foreground=self.colors["highlight"],
-        ).pack(anchor="w")
-        ttk.Label(timer_frame, textvariable=self.next_phase_var, style="Body.TLabel").pack(anchor="w")
-        ttk.Label(timer_frame, textvariable=self.total_detail_var, style="Status.TLabel").pack(anchor="w", pady=(0, 6))
+        ttk.Label(timer_frame, textvariable=self.timer_var, style="Status.TLabel").pack(anchor="w", pady=(2, 8))
         self.timer_display = ttk.Label(timer_frame, text="00:00", style="Timer.TLabel")
         self.timer_display.pack(anchor="center", pady=(4, 8))
         self.progress = ttk.Progressbar(timer_frame, style="Accent.Horizontal.TProgressbar", mode="determinate", maximum=1, value=0)
@@ -477,54 +433,57 @@ class CircuitTimerApp:
             return
         name = self.current_names[index]
         menu = self.menus[name]
-        self.controller.load_menu(menu)
-        if not self.controller.sequence:
+        self.sequence = list(self._build_sequence(menu))
+        if not self.sequence:
             messagebox.showwarning("タイマー", "有効なシーケンスがありません。")
             return
         self.active_menu_name = menu.name
-        self.total_duration = self.controller.total_seconds
+        self.current_phase_index = 0
+        self.remaining = self.sequence[0][1]
+        self.total_duration = sum(phase[1] for phase in self.sequence)
         self.progress.configure(maximum=max(1, self.total_duration))
         self.elapsed_total = 0
         self.progress.configure(value=0)
         self.timer_running = True
         self.status_var.set(f"{menu.name} を開始")
-        self.controller.start()
+        self._update_timer_label()
+        self._update_progress()
         self._schedule_tick()
 
+    def _build_sequence(self, menu: TrainingMenu) -> Sequence[Phase]:
+        return list(build_sequence(menu))
+
     def _schedule_tick(self) -> None:
-        if not self.timer_running:
-            return
         self.after_id = self.root.after(1000, self._tick)
 
     def _tick(self) -> None:
         if not self.timer_running:
             return
-        self.controller.tick()
-        if self.timer_running:
-            self._schedule_tick()
-
-    def _handle_phase_start(self, phase: Phase) -> None:
-        self.current_phase = phase
-        self.remaining = phase.duration
-        self.status_var.set(f"{phase.label} - セット {phase.set_index}/{phase.total_sets}")
-        self.phase_detail_var.set(f"現在: {phase.label} / {phase.set_index}セット目")
-        self._update_next_phase_label()
-        self._play_notification()
-
-    def _handle_tick(self, phase: Phase, remaining: int, elapsed_total: int) -> None:
-        self.current_phase = phase
-        self.remaining = max(0, remaining)
-        self.elapsed_total = elapsed_total
-        self.timer_var.set(f"{phase.label} - セット {phase.set_index}/{phase.total_sets}: 残り {self.remaining:02d} 秒")
-        self.timer_display.configure(text=format_time(self.remaining))
-        total = self.total_duration or 1
-        self.total_detail_var.set(f"総時間 {format_time(total)} / 経過 {format_time(self.elapsed_total)}")
+        self.remaining -= 1
+        self.elapsed_total += 1
+        if self.remaining <= 0:
+            self.current_phase_index += 1
+            if self.current_phase_index >= len(self.sequence):
+                self._finish_timer()
+                return
+            self.remaining = self.sequence[self.current_phase_index][1]
+        self._update_timer_label()
         self._update_progress()
+        self._schedule_tick()
 
-    def _handle_complete(self) -> None:
+    def _update_timer_label(self) -> None:
+        if not self.timer_running or not self.sequence:
+            self.timer_var.set("タイマー停止中")
+            self.timer_display.configure(text="00:00")
+            return
+        label, _seconds, set_number, total_sets = self.sequence[self.current_phase_index]
+        self.timer_var.set(f"{label} - セット {set_number}/{total_sets}: 残り {self.remaining:02d} 秒")
+        self.timer_display.configure(text=format_time(self.remaining))
+
+    def _finish_timer(self) -> None:
         self.timer_running = False
-        self.after_id = None
-        self.current_phase = None
+        self.sequence = []
+        self.current_phase_index = 0
         self.remaining = 0
         self.elapsed_total = 0
         self.timer_var.set("完了！")
@@ -534,24 +493,7 @@ class CircuitTimerApp:
             messagebox.showinfo("タイマー", "おつかれさまでした！")
         self.active_menu_name = None
         self.timer_display.configure(text="00:00")
-        self.progress.configure(value=self.total_duration if self.total_duration else 0)
-        self.phase_detail_var.set("フェーズ未開始")
-        self.next_phase_var.set("次: -")
-        self.total_detail_var.set("総時間 00:00 / 経過 00:00")
-
-    def _update_next_phase_label(self) -> None:
-        idx = self.controller.current_index + 1
-        if idx < len(self.controller.sequence):
-            next_phase = self.controller.sequence[idx]
-            self.next_phase_var.set(f"次: {next_phase.label} / {next_phase.set_index}セット目")
-        else:
-            self.next_phase_var.set("次: フィニッシュ！")
-
-    def _play_notification(self) -> None:
-        try:
-            self.root.bell()
-        except Exception:
-            pass
+        self.progress.configure(value=0)
 
     def stop_timer(self) -> None:
         if not self.timer_running:
@@ -560,17 +502,13 @@ class CircuitTimerApp:
         if self.after_id:
             self.root.after_cancel(self.after_id)
             self.after_id = None
-        self.controller.stop()
         self.timer_running = False
-        self.current_phase = None
+        self.sequence = []
         self.timer_var.set("停止しました")
         self.status_var.set("タイマーを停止しました。")
         self.elapsed_total = 0
         self.timer_display.configure(text="00:00")
         self.progress.configure(value=0)
-        self.phase_detail_var.set("フェーズ未開始")
-        self.next_phase_var.set("次: -")
-        self.total_detail_var.set("総時間 00:00 / 経過 00:00")
 
     def _update_progress(self) -> None:
         if self.total_duration <= 0:
@@ -621,3 +559,4 @@ if __name__ == "__main__":
             print("\n中断しました。")
     else:
         run_ui()
+

@@ -44,3 +44,4 @@ Last Updated: 2025-12-09
 ## 8. Next Steps
 - Set up Flutter env and start P-01.
 - Update this file and `mobile_timer_requirements.md` with PoC results.
+\n## 9. 現状メモ (2025-12-14)\n- Flutter SDK 未導入のため PoC 実行前。\n- python/docs/flutter_setup.md にセットアップ手順を追加済み。\n- ドメイン層(lib/domain/)を Dart に移植済みなので、SDKインストール後はP-01=雛形生成を実行し、直ちにタイマー画面PoCへ着手可能。\n
